@@ -1,0 +1,48 @@
+services:
+  consultation-app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      MONGODB_URI: mongodb://mongodb:27017/systemaops
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-https://api.dify.ai/v1}
+      DIFY_API_KEY: ${DIFY_API_KEY:?Set DIFY_API_KEY in .env}
+      DIFY_APP_TYPE: ${DIFY_APP_TYPE:-chatflow}
+      DIFY_INPUT_NAME: ${DIFY_INPUT_NAME:-consultation_json}
+      DIFY_OUTPUT_NAME: ${DIFY_OUTPUT_NAME:-analysis}
+      DIFY_TIMEOUT_MS: ${DIFY_TIMEOUT_MS:-90000}
+      DIFY_MAX_RETRIES: ${DIFY_MAX_RETRIES:-2}
+      DIFY_FALLBACK_ENABLED: ${DIFY_FALLBACK_ENABLED:-true}
+      DIFY_TIMEOUT_MS: ${DIFY_TIMEOUT_MS:-90000}
+      CONSULTATION_RATE_LIMIT: ${CONSULTATION_RATE_LIMIT:-10}
+      PDF_PYTHON: ${PDF_PYTHON:-python3}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: systemaops
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  mongo_data:
