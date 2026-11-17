@@ -1,402 +1,632 @@
 # SystemaOps AI Consultation Platform
 
-Production-ready consultation intake application for SystemaOps. Clients select services, provide company and project information, and receive an AI-generated solution recommendation and downloadable PDF report.
+> **Status:** ✅ All 5 automated tests pass · ✅ All endpoints verified locally · ✅ PDF generation working · ✅ Docker-ready
 
-The frontend uses plain HTML, CSS, and JavaScript. The backend uses Node.js and Express. Dify provides AI orchestration, and MongoDB can provide persistent storage.
+Production-ready AI consultation intake platform for SystemaOps. Clients select services, provide company and project details, and receive a structured AI-generated technology roadmap with a downloadable PDF report — in minutes.
 
-## Main features
+---
 
-- Responsive four-step consultation form
-- Multiple service selection and service-specific questions
-- Client-side review before submission
-- Dify Chatflow or Workflow integration
-- Structured and validated AI recommendations
-- Consultation reference numbers
-- Browser report view and professional PDF download
-- Optional MongoDB persistence
-- Development-only deterministic fallback
-- Request rate limiting, retry handling, timeouts, health checks, and structured logs
-- Docker deployment support
+## Table of Contents
 
-## How the system works
+1. [How it works](#how-it-works)
+2. [Technology stack](#technology-stack)
+3. [Project structure](#project-structure)
+4. [All API endpoints](#all-api-endpoints)
+5. [Quick start — Windows (local)](#quick-start--windows-local)
+6. [Quick start — Linux / macOS](#quick-start--linux--macos)
+7. [Environment variables](#environment-variables)
+8. [Dify AI setup](#dify-ai-setup)
+9. [Demo mode (no Dify required)](#demo-mode-no-dify-required)
+10. [Docker deployment](#docker-deployment)
+11. [Running tests](#running-tests)
+12. [Production deployment checklist](#production-deployment-checklist)
+13. [Security](#security)
+14. [Troubleshooting](#troubleshooting)
+15. [Recent changes](#recent-changes)
 
-```text
-Client browser
-    |
-    | POST /api/consultations
-    v
+---
+
+## How it works
+
+```
+Browser (4-step form)
+  │
+  │  POST /api/consultations
+  ▼
 Node.js / Express API
-    |-- validates input
-    |-- applies per-IP rate limit
-    |-- sends the structured request to Dify
-    v
-Dify Chatflow or Workflow
-    |-- LLM analysis
-    |-- knowledge-base retrieval (when configured in Dify)
-    |-- structured JSON response
-    v
-Express response validator
-    |-- MongoDB or in-memory development store
-    |-- web report
-    `-- downloadable PDF
+  ├─ Validates input
+  ├─ Applies per-IP rate limit
+  ├─ Saves record (MongoDB or in-memory)
+  ├─ Returns reference immediately (202)
+  └─ Calls Dify AI async
+        │
+        │  If Dify succeeds  →  structured JSON analysis stored
+        │  If Dify fails     →  deterministic fallback analysis stored
+        ▼
+Browser polls GET /api/consultations/:reference every 2.5 s (up to 5 min)
+  └─ When status = "analysis_ready" → renders report + PDF download
 ```
 
-The Dify API key remains on the server. It is never sent to browser JavaScript.
+The **Dify API key is never sent to the browser**. It lives only on the server.
+
+---
 
 ## Technology stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | HTML5, CSS3, vanilla JavaScript |
-| Backend | Node.js 22, Express |
-| AI orchestration | Dify Cloud or self-hosted Dify |
-| Database | MongoDB with an in-memory development fallback |
-| PDF | Python 3 and ReportLab |
-| Container | Docker and Docker Compose |
-| Testing | Node.js built-in test runner |
+| Layer            | Technology                                      |
+|------------------|-------------------------------------------------|
+| Frontend         | HTML5, CSS3, Vanilla JavaScript (no framework)  |
+| Backend          | Node.js 20+, Express 4                          |
+| Security         | Helmet (CSP), CORS, express-rate-limit          |
+| Compression      | compression (gzip)                              |
+| AI orchestration | Dify Cloud or self-hosted Dify (Chatflow / Workflow) |
+| Database         | MongoDB 7 (optional — in-memory fallback for dev) |
+| PDF              | Python 3 + ReportLab                            |
+| Container        | Docker + Docker Compose                         |
+| Testing          | Node.js built-in test runner (5 tests)          |
+
+---
 
 ## Project structure
 
-```text
-.
-|-- public/                       Website UI, styles, JavaScript, and logo
-|-- lib/
-|   |-- dify-client.js            Dify API client, retries, and timeout handling
-|   |-- analysis-schema.js        AI output normalization and validation
-|   `-- demo-analysis.js          Development fallback generator
-|-- scripts/
-|   `-- generate_consultation_pdf.py
-|-- test/                         Automated Dify integration tests
-|-- docs/
-|   |-- DIFY_WORKFLOW.md          Detailed Dify application configuration
-|   `-- ARCHITECTURE_MIGRATION.md Architecture and migration notes
-|-- server.js                     Express API and persistence
-|-- Dockerfile
-|-- docker-compose.yml
-|-- .env.example                  Safe configuration template
-`-- package.json
+```
+systemaops-ai-consultation/
+├── public/                         Static frontend served by Express
+│   ├── index.html                  Single-page application
+│   ├── app.js                      Frontend logic (form, polling, report)
+│   ├── styles.css                  All styles (responsive, dark hero)
+│   ├── robots.txt                  Crawler rules
+│   └── assets/
+│       └── systemaops-logo.png     Brand logo
+├── lib/
+│   ├── dify-client.js              Dify API client (retry, timeout, auth)
+│   ├── analysis-schema.js          AI output normalizer and validator
+│   └── demo-analysis.js            Deterministic fallback AI (no Dify needed)
+├── scripts/
+│   └── generate_consultation_pdf.py  PDF generator (Python + ReportLab)
+├── test/
+│   └── dify-client.test.js         Automated tests (5 tests)
+├── docs/
+│   ├── DIFY_WORKFLOW.md            Dify app setup guide
+│   └── ARCHITECTURE_MIGRATION.md   Architecture notes
+├── server.js                       Express server and all API routes
+├── Dockerfile                      Production container build
+├── docker-compose.yml              App + MongoDB services
+├── .env.example                    Safe configuration template
+├── .gitignore                      Excludes .env, node_modules, outputs
+└── package.json
 ```
 
-## Prerequisites
+---
 
-For local development:
+## All API endpoints
 
-- Node.js 20 or newer (Node.js 22 recommended)
-- npm
-- Python 3 with ReportLab for PDF generation
-- A published Dify application and its application API key
-- MongoDB only when persistent storage is required
+### `GET /api/health`
+Server and configuration status.
 
-Install ReportLab locally if it is not already available:
+**Response:**
+```json
+{
+  "ok": true,
+  "database": "memory",
+  "ai": {
+    "provider": "dify",
+    "configured": true,
+    "fallbackEnabled": true
+  }
+}
+```
 
-```bash
+---
+
+### `GET /api/services`
+Returns all 12 service offerings. Cached for 5 minutes.
+
+**Response:**
+```json
+{
+  "services": [
+    { "code": "website-development", "name": "Website Development", "description": "Fast, conversion-focused web platforms." },
+    { "code": "mobile-app-development", "name": "Mobile App Development", "description": "..." },
+    ...
+  ]
+}
+```
+
+**Available service codes:**
+
+| Code | Name |
+|------|------|
+| `website-development` | Website Development |
+| `mobile-app-development` | Mobile App Development |
+| `crm-development` | CRM Development |
+| `erp-solutions` | ERP Solutions |
+| `ai-automation` | AI Automation |
+| `ai-chatbots` | AI Chatbots |
+| `cloud-infrastructure` | Cloud Infrastructure |
+| `devops` | DevOps & CI/CD |
+| `data-engineering` | Data Engineering |
+| `api-development` | API Development |
+| `ui-ux-design` | UI/UX Design |
+| `custom-software` | Custom Software |
+
+---
+
+### `POST /api/consultations`
+Submit a new consultation. Rate limited to 10 per minute per IP.
+
+**Request body:**
+```json
+{
+  "schemaVersion": "1.0",
+  "contact": {
+    "name": "Pawan Dubey",
+    "email": "pawan@example.com"
+  },
+  "company": {
+    "name": "Acme Corp",
+    "industry": "Manufacturing",
+    "size": "51-200",
+    "website": "https://acme.com",
+    "description": "A growing manufacturing company"
+  },
+  "services": ["ai-automation", "cloud-infrastructure"],
+  "project": {
+    "challenges": "Manual processes slow us down",
+    "goals": "Automate operations and move to cloud",
+    "existingSystems": "SAP ERP, Microsoft 365",
+    "timeline": "3 months",
+    "budget": "INR 10-25 Lakh",
+    "erpEdition": null,
+    "requirements": "Scalable cloud with AI workflow automation"
+  },
+  "consent": {
+    "accepted": true,
+    "acceptedAt": "2026-11-17T10:00:00.000Z"
+  }
+}
+```
+
+**Response `202 Accepted`:**
+```json
+{
+  "reference": "CON-2026-EA5781C8-B25C-471D-AA20-D8EBC6144131",
+  "status": "processing"
+}
+```
+
+**Error responses:**
+- `422` — missing required fields
+- `429` — rate limit exceeded
+
+---
+
+### `GET /api/consultations/:reference`
+Poll for consultation status. No-store cache.
+
+**Possible `status` values:**
+
+| Status | Meaning |
+|--------|---------|
+| `processing` | AI analysis in progress |
+| `analysis_ready` | Complete — `analysis` field is populated |
+| `failed` | Dify failed and fallback is disabled |
+
+**Response when ready:**
+```json
+{
+  "reference": "CON-2026-...",
+  "status": "analysis_ready",
+  "analysis": {
+    "mode": "deterministic-fallback",
+    "executiveSummary": "Acme Corp wants to automate operations...",
+    "proposedSolution": ["Human-supervised AI automation workflow", "..."],
+    "technologyStack": ["Dify", "Node.js", "AWS", "..."],
+    "architecture": ["Responsive HTML/CSS/JS client", "..."],
+    "roadmap": [
+      { "phase": 1, "name": "Automation discovery", "duration": "1-2 weeks" },
+      { "phase": 2, "name": "AI pilot and evaluation", "duration": "2-4 weeks" }
+    ],
+    "aiOpportunities": ["..."],
+    "security": ["..."],
+    "risks": ["..."],
+    "assumptions": ["..."],
+    "nextSteps": ["..."],
+    "disclaimer": "..."
+  }
+}
+```
+
+---
+
+### `GET /api/consultations/:reference/pdf`
+Download the consultation as a PDF. Rate limited to 5 per minute per IP.
+
+**Response:** `application/pdf` binary stream  
+**Filename:** `SystemaOps-CON-2026-....pdf`
+
+---
+
+## Quick start — Windows (local)
+
+### Prerequisites
+- [Node.js 20+](https://nodejs.org/) (22 recommended)
+- [Python 3](https://python.org/) with ReportLab
+
+```powershell
+# Check Node.js version
+node --version   # should be v20 or higher
+
+# Install ReportLab (once)
 python -m pip install reportlab
 ```
 
-Docker users do not need to install Python or ReportLab separately because the Docker image includes them.
-
-## Quick start on Windows
-
-1. Extract the project ZIP.
-2. Open PowerShell in the extracted directory.
-3. Install dependencies:
+### Setup
 
 ```powershell
+# 1. Clone
+git clone https://github.com/Pawandubey11/systemaops-ai-consultation.git
+cd systemaops-ai-consultation
+
+# 2. Install dependencies
 npm install
-```
 
-4. Create the local environment file:
-
-```powershell
+# 3. Create .env from template
 Copy-Item .env.example .env
 ```
 
-5. Open `.env` and add the Dify application API key.
-6. Validate and start the application:
+### Configure `.env`
 
-```powershell
-npm run check
-npm test
-npm start
-```
-
-7. Open `http://localhost:3000/#consultation`.
-
-Use `npm run dev` instead of `npm start` when you want the server to restart automatically after code changes.
-
-## Environment configuration
-
-Never commit `.env` or send it inside a project ZIP. Use `.env.example` as the template.
+Open `.env` and fill in:
 
 ```dotenv
 PORT=3000
-MONGODB_URI=
+MONGODB_URI=                        # leave blank → uses in-memory store (dev mode)
 CONSULTATION_EMAIL=hello@systemaops.com
-PDF_PYTHON=
+PDF_PYTHON=python                   # use "python" on Windows, "python3" on Linux/macOS
 DIFY_BASE_URL=https://api.dify.ai/v1
-DIFY_API_KEY=app-your-dify-application-key
+DIFY_API_KEY=                       # paste your Dify app API key here (see Dify setup)
 DIFY_APP_TYPE=chatflow
 DIFY_INPUT_NAME=consultation_json
 DIFY_OUTPUT_NAME=analysis
 DIFY_TIMEOUT_MS=90000
 DIFY_MAX_RETRIES=2
-DIFY_FALLBACK_ENABLED=true
+DIFY_FALLBACK_ENABLED=true          # true = works even without a valid Dify key (demo mode)
 CONSULTATION_RATE_LIMIT=10
 CORS_ORIGINS=http://localhost:3000,https://systemaops.com
 ```
 
-| Variable | Required | Purpose |
-|---|---:|---|
-| `PORT` | No | Web server port; default is `3000` |
-| `MONGODB_URI` | Production | MongoDB connection string; blank uses temporary memory storage |
-| `CONSULTATION_EMAIL` | No | SystemaOps contact email shown in generated material |
-| `PDF_PYTHON` | No | Python executable path; useful when Python is not on `PATH` |
-| `DIFY_BASE_URL` | Yes | Dify API base URL ending in `/v1` |
-| `DIFY_API_KEY` | Yes | Published Dify application API key beginning with `app-` |
-| `DIFY_APP_TYPE` | Yes | `chatflow` or `workflow` |
-| `DIFY_INPUT_NAME` | Workflow | Workflow input variable containing consultation JSON |
-| `DIFY_OUTPUT_NAME` | Workflow | Workflow output variable containing analysis JSON |
-| `DIFY_TIMEOUT_MS` | No | Maximum Dify request duration; default is 90 seconds |
-| `DIFY_MAX_RETRIES` | No | Retry count for temporary Dify failures |
-| `DIFY_FALLBACK_ENABLED` | No | Enables demo output when Dify is unavailable; use `false` in production |
-| `CONSULTATION_RATE_LIMIT` | No | Maximum submissions per IP address per minute |
+> **No Dify key?** That's fine — set `DIFY_FALLBACK_ENABLED=true` and the demo analysis will run automatically. See [Demo mode](#demo-mode-no-dify-required).
 
-If `MONGODB_URI` is blank, consultations disappear when the server restarts. Always configure MongoDB for production.
+### Run
 
-## Configure Dify Cloud
+```powershell
+# Check syntax of all JS files
+npm run check
 
-1. Sign in to Dify and create a **Chatflow** application.
-2. Install and configure an approved model provider, or use available Dify model credits.
-3. Add an LLM node and configure it to analyze the consultation request.
-4. Require the LLM to return JSON only.
-5. Optionally add Knowledge Retrieval nodes for the SystemaOps service catalog, previous projects, pricing, policies, architecture standards, and delivery documentation.
-6. Test the flow in Preview with a sample consultation.
-7. Publish the Chatflow.
-8. Open **API Access** and create an application API key.
-9. Put that key in `DIFY_API_KEY` inside `.env`.
-10. Set `DIFY_APP_TYPE=chatflow`.
+# Run tests
+npm test
 
-For a Dify Workflow application, set `DIFY_APP_TYPE=workflow` and make sure the configured input and output variable names match `DIFY_INPUT_NAME` and `DIFY_OUTPUT_NAME`.
+# Start the server
+npm start
+```
 
-The expected AI output contains:
+Open **http://localhost:3000** in your browser.
 
-- `executiveSummary`
-- `proposedSolution`
-- `technologyStack`
-- `architecture`
-- `roadmap`
-- `aiOpportunities`
-- `security`
-- `risks`
-- `assumptions`
-- `nextSteps`
-- `disclaimer`
+For auto-reload during development:
+```powershell
+npm run dev
+```
 
-See [docs/DIFY_WORKFLOW.md](docs/DIFY_WORKFLOW.md) for the recommended prompt, JSON contract, RAG configuration, and publishing checklist.
+---
 
-## Run commands
+## Quick start — Linux / macOS
 
 ```bash
-npm start       # production-style start
-npm run dev     # start with Node watch mode
-npm run check   # JavaScript syntax checks
-npm test        # automated tests
+# 1. Clone
+git clone https://github.com/Pawandubey11/systemaops-ai-consultation.git
+cd systemaops-ai-consultation
+
+# 2. Install dependencies
+npm install
+
+# 3. Install ReportLab
+pip3 install reportlab
+
+# 4. Configure
+cp .env.example .env
+# Edit .env with your values (use PDF_PYTHON=python3)
+
+# 5. Check, test, start
+npm run check
+npm test
+npm start
 ```
 
-## API reference
+Open **http://localhost:3000**
 
-### Health check
+---
 
-```http
-GET /api/health
-```
+## Environment variables
 
-Example response:
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `3000` | HTTP server port |
+| `MONGODB_URI` | Production | _(blank)_ | MongoDB connection string. Blank = in-memory dev store |
+| `CONSULTATION_EMAIL` | No | `hello@systemaops.com` | Contact email shown in generated materials |
+| `PDF_PYTHON` | No | `python3` | Python executable. Use `python` on Windows if `python3` is not on PATH |
+| `DIFY_BASE_URL` | Yes (if using Dify) | `https://api.dify.ai/v1` | Dify API base URL |
+| `DIFY_API_KEY` | Yes (if using Dify) | _(blank)_ | Application API key — starts with `app-` |
+| `DIFY_APP_TYPE` | Yes | `chatflow` | `chatflow` or `workflow` |
+| `DIFY_INPUT_NAME` | Workflow only | `consultation_json` | Input variable name in Dify workflow |
+| `DIFY_OUTPUT_NAME` | Workflow only | `analysis` | Output variable name in Dify workflow |
+| `DIFY_TIMEOUT_MS` | No | `90000` | Per-attempt timeout in milliseconds |
+| `DIFY_MAX_RETRIES` | No | `2` | Retry count on timeout or 5xx errors |
+| `DIFY_FALLBACK_ENABLED` | No | `true` | `true` = use deterministic fallback if Dify fails |
+| `CONSULTATION_RATE_LIMIT` | No | `10` | Max consultation submissions per minute per IP |
+| `CORS_ORIGINS` | No | localhost origins | Comma-separated list of allowed CORS origins |
+
+---
+
+## Dify AI setup
+
+Dify provides the AI analysis. You can use [Dify Cloud](https://cloud.dify.ai) (free tier available) or self-host.
+
+### Steps
+
+1. Create a Dify account at [cloud.dify.ai](https://cloud.dify.ai)
+2. Create a new **Chatflow** application (recommended) or **Workflow**
+3. Add the system prompt from [`docs/DIFY_WORKFLOW.md`](docs/DIFY_WORKFLOW.md)
+4. Publish the app
+5. Go to **API Access** and copy your **Application API Key** (starts with `app-`)
+6. Paste it into `.env` as `DIFY_API_KEY=app-xxxxxxxxxxxxxxxx`
+7. Restart the server
+
+### What Dify must return
+
+Your Dify prompt must instruct the LLM to return **only a JSON object** (no Markdown fences) with these fields:
 
 ```json
 {
-  "ok": true,
-  "database": "mongodb",
-  "ai": {
-    "provider": "dify",
-    "configured": true,
-    "fallbackEnabled": false
-  }
+  "executiveSummary": "string",
+  "proposedSolution": ["string"],
+  "technologyStack": ["string"],
+  "architecture": ["string"],
+  "roadmap": [{ "phase": 1, "name": "string", "duration": "string" }],
+  "aiOpportunities": ["string"],
+  "security": ["string"],
+  "risks": ["string"],
+  "assumptions": ["string"],
+  "nextSteps": ["string"],
+  "disclaimer": "string"
 }
 ```
 
-### Available services
+See [`docs/DIFY_WORKFLOW.md`](docs/DIFY_WORKFLOW.md) for the full prompt template.
 
-```http
-GET /api/services
+---
+
+## Demo mode (no Dify required)
+
+The platform works **without any Dify key** using the built-in deterministic fallback.
+
+Set in `.env`:
+```dotenv
+DIFY_FALLBACK_ENABLED=true
 ```
 
-### Submit a consultation
+What happens:
+- Form submission → server accepts it
+- Server tries Dify → fails (no key) → automatically uses `lib/demo-analysis.js`
+- Demo analysis generates a real, structured report based on the selected services
+- PDF download works identically
+- The report shows `mode: "deterministic-fallback"` and `disclaimer` notes it is not a real AI response
 
-```http
-POST /api/consultations
-Content-Type: application/json
-```
+This is perfect for local development, testing, and demos.
 
-Example request:
-
-```json
-{
-  "schemaVersion": "1.0",
-  "contact": {
-    "name": "Jane Client",
-    "email": "jane@example.com"
-  },
-  "company": {
-    "name": "Example Company",
-    "industry": "Professional Services",
-    "size": "11-50",
-    "website": "https://example.com",
-    "description": "A growing service-based company"
-  },
-  "services": ["website-development", "cloud-infrastructure"],
-  "project": {
-    "challenges": "No modern customer-facing website",
-    "goals": "Create and deploy a scalable website on AWS",
-    "existingSystems": "Microsoft 365",
-    "timeline": "3 months",
-    "budget": "$10,000-$25,000",
-    "erpEdition": null,
-    "requirements": "Responsive design, CMS, analytics, backups, and monitoring"
-  },
-  "consent": {
-    "accepted": true,
-    "acceptedAt": "2026-01-01T10:00:00.000Z"
-  }
-}
-```
-
-The response includes a reference such as `CON-2026-761B13A9` and the structured analysis. Dify processing can take 30-60 seconds depending on the selected model and workflow.
-
-### Retrieve a consultation
-
-```http
-GET /api/consultations/:reference
-```
-
-### Download the PDF
-
-```http
-GET /api/consultations/:reference/pdf
-```
-
-Example: `http://localhost:3000/api/consultations/CON-2026-761B13A9/pdf`
+---
 
 ## Docker deployment
 
-1. Create `.env` and configure the production values.
-2. Build and start:
+Docker Compose runs both the Node.js app and MongoDB together.
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+
+### Setup
 
 ```bash
+# 1. Create .env from template
+cp .env.example .env     # or: Copy-Item .env.example .env  (Windows)
+
+# 2. Edit .env — set DIFY_API_KEY and other production values
+```
+
+### Run
+
+```bash
+# Build and start all services (app + MongoDB)
 docker compose up --build -d
-```
 
-3. Check container status and logs:
-
-```bash
-docker compose ps
+# View logs
 docker compose logs -f consultation-app
+
+# Check status
+docker compose ps
+
+# Stop
+docker compose down
+
+# Stop and remove all data (volumes)
+docker compose down -v
 ```
 
-4. Stop the application:
+The app will be available at **http://localhost:3000**
+
+### What Docker Compose includes
+
+| Service | Image | Purpose |
+|---------|-------|---------|
+| `consultation-app` | Built from `Dockerfile` | Node.js Express API + static frontend |
+| `mongodb` | `mongo:7` | Persistent database with health check |
+
+MongoDB data is persisted in the `mongo_data` Docker volume. It survives `docker compose down` but is deleted with `docker compose down -v`.
+
+### Docker environment
+
+In Docker mode, `MONGODB_URI` is automatically set to:
+```
+mongodb://mongodb:27017/systemaops
+```
+
+The app waits for MongoDB to pass its health check before starting.
+
+---
+
+## Running tests
 
 ```bash
-docker compose down
+# Run all 5 automated tests
+npm test
+
+# Check JavaScript syntax on all files
+npm run check
 ```
 
-The included Compose file deploys this consultation application only. It does not install Dify or MongoDB. Use Dify Cloud, or deploy self-hosted Dify separately using Dify's official versioned deployment. Use a managed MongoDB service or add an appropriately secured MongoDB deployment.
+### Test coverage
+
+| # | Test |
+|---|------|
+| 1 | Normalizes Dify JSON string output to the report contract |
+| 2 | Sends workflow request with server-side bearer authentication |
+| 3 | Retries retryable Dify failures (5xx, timeout) |
+| 4 | Supports the Dify Chatflow app contract |
+| 5 | Rejects incomplete workflow output before it reaches the frontend |
+
+---
 
 ## Production deployment checklist
 
-- Set `NODE_ENV=production`.
-- Set `DIFY_FALLBACK_ENABLED=false`.
-- Configure a persistent `MONGODB_URI`.
-- Store `.env` values in the hosting platform's secret manager.
-- Put the application behind HTTPS and a reverse proxy/load balancer.
-- Restrict access to database and internal services.
-- Configure backups, retention, monitoring, and alerts.
-- Review Dify model and knowledge-base permissions.
-- Apply an appropriate Content Security Policy for the final hosting domain.
-- Run `npm run check` and `npm test` before deployment.
-- Verify a real submission, record retrieval, and PDF download after deployment.
+- [ ] `NODE_ENV=production` is set
+- [ ] `DIFY_API_KEY` is set to a real, rotated application key
+- [ ] `DIFY_FALLBACK_ENABLED=false` (disable demo mode in production)
+- [ ] `MONGODB_URI` points to a managed MongoDB instance (Atlas, etc.)
+- [ ] `.env` is **not** committed to git and is stored in a secrets manager
+- [ ] Application is behind HTTPS + reverse proxy (nginx, Caddy, etc.)
+- [ ] `CORS_ORIGINS` is set to your exact production domain(s)
+- [ ] `CONSULTATION_RATE_LIMIT` is tuned for expected traffic
+- [ ] Database backups and retention configured
+- [ ] `npm run check` passes
+- [ ] `npm test` passes (all 5)
+- [ ] Real end-to-end form submission tested after deployment
+- [ ] PDF download verified after deployment
+- [ ] `/api/health` returns `configured: true, fallbackEnabled: false`
+
+---
+
+## Security
+
+| Area | Implementation |
+|------|---------------|
+| API key | Dify key never leaves the server — not in HTML, JS, or logs |
+| Input validation | Required fields validated on every POST |
+| Rate limiting | 10 req/min on consultations, 5 req/min on PDFs |
+| Security headers | Helmet with strict CSP, referrer policy |
+| CORS | Configured allowed origins; rejects others |
+| XSS | All dynamic HTML uses `escapeHtml()` |
+| PDF subprocess | Killed after 30 s timeout |
+| Credentials | Never commit `.env`; rotate keys if exposed |
+| Separation | Development keys ≠ production keys |
+
+---
 
 ## Troubleshooting
 
-### The form remains on “Submitting your consultation”
+### Form stays on "Submitting…" forever
 
-Dify analysis normally takes 30-60 seconds. Check the server terminal for a `dify_workflow_succeeded` or failure log. Confirm the Dify app is published, the model has available credits, and `DIFY_TIMEOUT_MS` is at least `90000`.
+Dify analysis normally takes 30–90 s. The browser polls for up to **5 minutes**.
 
-### Dify authentication error
+Check server logs for `dify_workflow_succeeded` or `dify_workflow_failed`.
 
-Confirm `DIFY_API_KEY` is an **application API key**, not a model-provider key. It normally starts with `app-`. Restart the Node server after changing `.env`.
-
-### Dify returns invalid or incomplete output
-
-Test the application in Dify Preview. Make the prompt require JSON only and include every field in the expected output contract. Do not surround the JSON with Markdown code fences.
+If you see `dify_workflow_failed`:
+- Confirm `DIFY_API_KEY` is a **published** application key (starts with `app-`)
+- Confirm the Dify app is published (not in draft)
+- Confirm the model in your Dify app has available quota
+- Set `DIFY_FALLBACK_ENABLED=true` to use demo mode while you debug
 
 ### PDF download fails
 
-Run `python --version` and `python -m pip show reportlab`. Install ReportLab if missing. On Windows, set `PDF_PYTHON` to the full Python executable path when Python is not available on `PATH`.
+```powershell
+# Windows
+python --version
+python -m pip show reportlab
 
-### Consultation cannot be found after restart
+# Linux/macOS
+python3 --version
+python3 -m pip show reportlab
+```
 
-The server is using its in-memory development store. Configure `MONGODB_URI` for persistent records.
+Install ReportLab if missing:
+```bash
+pip install reportlab       # Windows
+pip3 install reportlab      # Linux/macOS
+```
 
-### Port 3000 is already in use
+Then set `PDF_PYTHON=python` (Windows) or `PDF_PYTHON=python3` (Linux) in `.env`.
 
-Change `PORT` in `.env`, for example `PORT=3001`, restart the server, and open the corresponding URL.
+### "MONGODB_URI is not set" warning on startup
 
-### Confirm the active configuration
+This is expected in development. The server uses in-memory storage. Data is lost when the server restarts. Set `MONGODB_URI` for persistent storage.
 
-Open `/api/health`. Production should report `configured: true`, `provider: "dify"`, and `fallbackEnabled: false`.
+### Port 3000 already in use
 
-## Security guidance
+```dotenv
+PORT=3001
+```
 
-- Never put the Dify key in `public/app.js`, HTML, or frontend configuration.
-- Never commit or share `.env`.
-- Rotate a key immediately if it is exposed.
-- Use separate Dify keys and environments for development and production.
-- Validate and sanitize all external knowledge-base documents.
-- Apply least-privilege access to Dify, MongoDB, deployment, and CI/CD accounts.
-- Avoid logging client-sensitive form contents.
-- Define consultation data retention and deletion policies.
-- Review privacy notices and consent wording for the countries where the service operates.
+Then open `http://localhost:3001`
 
-## Verification completed for this project
+### CORS errors in browser
 
-- Live Dify Chatflow submission succeeded
-- Structured AI response was received and stored
-- Consultation retrieval succeeded
-- PDF generation and download succeeded
-- Dify fallback was disabled during live verification
-- Automated tests passed
-- JavaScript syntax checks passed
+Add your frontend URL to `CORS_ORIGINS` in `.env`:
+```dotenv
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173,https://yourdomain.com
+```
 
-## Additional documentation
+### Dify returns invalid output
 
-- [Dify workflow and RAG setup](docs/DIFY_WORKFLOW.md)
-- [Architecture and Dify migration](docs/ARCHITECTURE_MIGRATION.md)
+Test your Dify prompt in Dify Preview. The LLM must return **only** a JSON object — no Markdown code fences, no explanation text. See [`docs/DIFY_WORKFLOW.md`](docs/DIFY_WORKFLOW.md).
+
+### Docker: MongoDB not connecting
+
+```bash
+docker compose logs mongodb
+docker compose ps
+```
+
+MongoDB needs ~15 s to initialize. The app health check waits automatically.
+
+---
 
 ## Recent changes (v1.1.0)
 
-- **Polling timeout extended** — frontend now waits up to 5 minutes (was 1 minute) to match the server's maximum Dify retry window (90s × 3 retries)
-- **DIFY_FALLBACK_ENABLED defaults to true** — temporary Dify outages no longer break the entire form for users
-- **CORS middleware added** — configurable via `CORS_ORIGINS` env var; allows multiple domains
-- **Response compression** — all API responses gzip-compressed via `compression` middleware
-- **Rate limiting** — replaced custom rate limiter with `express-rate-limit`; separate stricter limit on PDF generation
-- **Cache-Control headers** — `/api/services` cached for 5 minutes; consultation and PDF endpoints set `no-store`
-- **MongoDB in Docker Compose** — `docker-compose.yml` now includes a MongoDB 7 service with health check and persistent volume
-- **robots.txt** — added `public/robots.txt` to allow crawlers on `/` and block `/api/`
-- **Report fade-in** — smooth opacity + translate animation when the AI report section is revealed
-- **XSS hardening** — all dynamic content in `renderReport()` and `renderServices()` now routed through `escapeHtml()`
-- **Startup warnings** — server logs a clear warning on startup when `MONGODB_URI` is missing
-- **Python path** — removed hardcoded Windows Python path from server; uses env var or `python3` default
+- **Polling timeout 120s → 300s** — matches server maximum (90s × 3 retries)
+- **DIFY_FALLBACK_ENABLED defaults to true** — Dify outages no longer break the form
+- **CORS middleware** — configurable via `CORS_ORIGINS` env var
+- **Response compression** — gzip via `compression` middleware
+- **Rate limiting** — `express-rate-limit` (PDF: 5/min, consultations: configurable)
+- **Cache-Control** — `/api/services` cached 5 min; consultations/PDFs: `no-store`
+- **MongoDB in Docker Compose** — Mongo 7 service with health check + volume
+- **robots.txt** — allows `/`, disallows `/api/`
+- **Report fade-in** — smooth opacity + translate animation on report reveal
+- **XSS hardening** — all dynamic content via `escapeHtml()`
+- **PDF_PYTHON env var** — removed hardcoded Windows Python path
+- **Startup warnings** — clear log when MONGODB_URI missing
+- **Helmet CSP** — allows Google Fonts domains properly
+- **Full UUID references** — unguessable `CON-2026-<UUID>` format
 
-## License and ownership
+---
 
-This repository is an internal SystemaOps project. Add the organization's approved license and usage policy before public distribution.
+## License
+
+Internal SystemaOps project. Add the organization's approved license before public distribution.
